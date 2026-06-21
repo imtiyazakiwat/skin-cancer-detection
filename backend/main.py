@@ -22,7 +22,7 @@ from PIL import Image
 # Configuration
 # ---------------------------------------------------------------------------
 MODEL_DIR = Path(os.getenv("MODEL_DIR", Path(__file__).parent / "model"))
-# Input size must match what the model was trained on (SqueezeNet -> 224).
+# Fallback input size if it can't be read from the model (224 for the demo CNNs).
 IMG_SIZE = int(os.getenv("IMG_SIZE", "224"))
 
 # HAM10000 class labels (7 classes). Order MUST match the training generator's
@@ -36,7 +36,9 @@ CLASS_LABELS = {
     "nv": "Melanocytic nevi",
     "vasc": "Vascular lesions",
 }
-# Index order used during training (alphabetical, as Keras does by default).
+# Index order for the 224px demo models (SqueezeNet / EfficientNet), which use
+# Keras' default alphabetical class ordering.
+# (The separate 28x28 report notebook uses a different hmnist ordering.)
 CLASS_ORDER = ["akiec", "bcc", "bkl", "df", "mel", "nv", "vasc"]
 # Classes considered malignant / requiring urgent attention.
 MALIGNANT = {"mel", "bcc", "akiec"}
@@ -133,14 +135,30 @@ def model_expects_metadata(model) -> bool:
         return False
 
 
-def preprocess(image_bytes: bytes) -> np.ndarray:
+def model_image_size(model) -> int:
+    """Read the expected square input size from the model (e.g. 224 or 28).
+
+    Falls back to IMG_SIZE if it can't be determined, so the backend adapts to
+    whatever model.keras is dropped into backend/model/.
+    """
+    try:
+        for inp in model.inputs:
+            shape = inp.shape
+            if len(shape) == 4 and shape[1] is not None:  # (batch, H, W, C)
+                return int(shape[1])
+    except Exception:
+        pass
+    return IMG_SIZE
+
+
+def preprocess(image_bytes: bytes, size: int) -> np.ndarray:
     """Decode image bytes and prepare a batch tensor for the model."""
     try:
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid or unsupported image file.")
 
-    img = img.resize((IMG_SIZE, IMG_SIZE))
+    img = img.resize((size, size))
     arr = np.asarray(img, dtype=np.float32) / 255.0
     return np.expand_dims(arr, axis=0)
 
@@ -188,7 +206,7 @@ async def predict(
         raise HTTPException(status_code=400, detail="Uploaded file must be an image.")
 
     image_bytes = await file.read()
-    batch = preprocess(image_bytes)
+    batch = preprocess(image_bytes, model_image_size(model))
 
     # Multimodal models take [image, metadata]; single-input models take image.
     if model_expects_metadata(model):

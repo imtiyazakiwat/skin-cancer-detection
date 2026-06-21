@@ -15,6 +15,8 @@ backend/model/*.keras
 backend/model/*.h5
 backend/model/saved_model/
 backend/model/*.tflite
+# ...but DO track the shipped demo model so the app works out of the box.
+!backend/model/model.keras
 
 # Node
 frontend/node_modules/

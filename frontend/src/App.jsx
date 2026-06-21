@@ -200,7 +200,7 @@ export default function App() {
       </main>
 
       <footer className="footer">
-        <span>HAM10000 · EfficientNetB0 + metadata · FastAPI + React</span>
+        <span>HAM10000 · CNN · FastAPI + React</span>
       </footer>
     </div>
   );

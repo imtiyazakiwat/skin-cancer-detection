@@ -1,0 +1,24 @@
+# Secrets / credentials - never commit these
+access_token
+kaggle.json
+*.pem
+.env
+.env.local
+
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+
+# Trained models (large binaries)
+backend/model/*.keras
+backend/model/*.h5
+backend/model/saved_model/
+backend/model/*.tflite
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# OS
+.DS_Store

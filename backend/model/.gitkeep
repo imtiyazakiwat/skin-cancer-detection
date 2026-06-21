@@ -1,0 +1,6 @@
+# Place your trained model here:
+#   - model.keras   (recommended, single file)
+#   - model.h5
+#   - saved_model/  (TF SavedModel directory)
+#
+# Export it from the Colab notebook in ../notebook/.

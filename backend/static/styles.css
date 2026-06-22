@@ -233,6 +233,23 @@ body {
   margin-top: 24px;
 }
 
+.ood-warning {
+  background: rgba(234, 179, 8, 0.14);
+  border: 1px solid rgba(234, 179, 8, 0.6);
+  color: #fde68a;
+  padding: 14px 16px;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin-bottom: 18px;
+}
+
+.ood-warning strong {
+  display: block;
+  color: #facc15;
+  margin-bottom: 3px;
+}
+
 .assessment {
   border-radius: 14px;
   padding: 18px 20px;

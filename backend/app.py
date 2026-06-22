@@ -26,6 +26,9 @@ from PIL import Image
 MODEL_DIR = Path(os.getenv("MODEL_DIR", Path(__file__).parent / "model"))
 IMG_SIZE = int(os.getenv("IMG_SIZE", "224"))
 MAX_FILE_MB = 10
+# If less than this fraction of the image looks like skin, warn that the photo
+# probably isn't a dermatoscopic skin image (so the result is meaningless).
+SKIN_THRESHOLD = float(os.getenv("SKIN_THRESHOLD", "0.30"))
 
 # HAM10000 class labels (7 classes). Order MUST match the training generator's
 # class_indices (alphabetical for the 224px demo models).
@@ -140,6 +143,29 @@ def preprocess(image_bytes: bytes, size: int) -> np.ndarray:
     return np.expand_dims(arr, axis=0)
 
 
+def skin_fraction(image_bytes: bytes) -> float:
+    """Rough estimate of how much of the image is skin-colored (0..1).
+
+    Combines a common RGB skin rule with a YCbCr range. This is a heuristic to
+    catch obviously-non-skin photos (cars, books, fruit), NOT a real detector.
+    """
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize((128, 128))
+    arr = np.asarray(img, dtype=np.float32)
+    r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+    mx = arr.max(axis=-1)
+    mn = arr.min(axis=-1)
+
+    rule_rgb = (
+        (r > 95) & (g > 40) & (b > 20) & ((mx - mn) > 15)
+        & (np.abs(r - g) > 15) & (r > g) & (r > b)
+    )
+    cb = 128.0 - 0.168736 * r - 0.331264 * g + 0.5 * b
+    cr = 128.0 + 0.5 * r - 0.418688 * g - 0.081312 * b
+    rule_ycc = (cb >= 77) & (cb <= 127) & (cr >= 133) & (cr <= 173)
+
+    return float((rule_rgb | rule_ycc).mean())
+
+
 def run_prediction(image_bytes: bytes, age, sex, localization) -> dict:
     """Core inference shared by the HTML form and the JSON API."""
     model = load_model()
@@ -186,7 +212,21 @@ def run_prediction(image_bytes: bytes, age, sex, localization) -> dict:
         message = "Likely benign (not cancer) - but this is not a diagnosis."
         level = "low"
 
+    skin_frac = skin_fraction(image_bytes)
+    looks_like_skin = skin_frac >= SKIN_THRESHOLD
+
     return {
+        "input_check": {
+            "looks_like_skin": looks_like_skin,
+            "skin_fraction": round(skin_frac, 3),
+            "warning": (
+                None if looks_like_skin else
+                "This doesn't look like a close-up (dermatoscopic) skin image. "
+                "The model only knows 7 skin-lesion types and is forced to label "
+                "any picture as one of them, so this result is almost certainly "
+                "meaningless. Try a clear, close-up photo of the skin lesion."
+            ),
+        },
         "prediction": {
             "key": top_key,
             "label": CLASS_LABELS[top_key],

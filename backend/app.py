@@ -213,11 +213,20 @@ def run_prediction(image_bytes: bytes, age, sex, localization) -> dict:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+def model_present() -> bool:
+    """True if a model file exists on disk (regardless of whether it's loaded)."""
+    return (
+        (MODEL_DIR / "model.keras").exists()
+        or (MODEL_DIR / "model.h5").exists()
+        or (MODEL_DIR / "saved_model").exists()
+    )
+
+
 def _form_context(**overrides):
     ctx = {
         "loc_categories": LOC_CATEGORIES,
         "max_file_mb": MAX_FILE_MB,
-        "model_loaded": _model is not None,
+        "model_loaded": _model is not None or model_present(),
         "age": "",
         "sex": "unknown",
         "localization": "unknown",

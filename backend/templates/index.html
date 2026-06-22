@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Skin Lesion Classifier (Demo)</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="header">
+        <h1>Skin Lesion Classifier</h1>
+        <p class="subtitle">Upload a dermatoscopic image to get an AI screening estimate.</p>
+      </header>
+
+      <div class="disclaimer" role="alert">
+        <strong>Educational demo only.</strong> This is not a medical device and
+        does not provide a diagnosis. Always consult a qualified dermatologist
+        for any health concern.
+      </div>
+
+      <main class="card">
+        {% if not model_loaded %}
+        <div class="error">
+          No model is loaded yet. Place a trained <code>model.keras</code> in
+          <code>backend/model/</code> and restart the app.
+        </div>
+        {% endif %}
+
+        <form method="POST" action="/" enctype="multipart/form-data">
+          <label class="dropzone" for="file-input">
+            {% if image_data_uri %}
+            <img src="{{ image_data_uri }}" alt="Selected lesion" class="preview" />
+            {% else %}
+            <div class="dropzone__hint">
+              <p class="dropzone__title">Choose an image</p>
+              <p class="dropzone__sub">JPG / PNG, max {{ max_file_mb }} MB</p>
+            </div>
+            {% endif %}
+            <input id="file-input" name="file" type="file" accept="image/*" class="file-input" />
+          </label>
+
+          <fieldset class="meta">
+            <legend class="meta__legend">
+              Patient details <span class="meta__hint">(optional, improves accuracy)</span>
+            </legend>
+            <div class="meta__grid">
+              <label class="meta__field">
+                <span>Age</span>
+                <input type="number" name="age" min="0" max="100" placeholder="e.g. 45"
+                       value="{{ age }}" />
+              </label>
+              <label class="meta__field">
+                <span>Sex</span>
+                <select name="sex">
+                  <option value="unknown" {{ 'selected' if sex == 'unknown' else '' }}>Prefer not to say</option>
+                  <option value="female" {{ 'selected' if sex == 'female' else '' }}>Female</option>
+                  <option value="male" {{ 'selected' if sex == 'male' else '' }}>Male</option>
+                </select>
+              </label>
+              <label class="meta__field">
+                <span>Body site</span>
+                <select name="localization">
+                  {% for loc in loc_categories %}
+                  <option value="{{ loc }}" {{ 'selected' if localization == loc else '' }}>
+                    {{ 'Not sure' if loc == 'unknown' else loc|capitalize }}
+                  </option>
+                  {% endfor %}
+                </select>
+              </label>
+            </div>
+          </fieldset>
+
+          <div class="actions">
+            <button class="btn btn--primary" type="submit">Analyze image</button>
+            <a class="btn" href="/">Reset</a>
+          </div>
+        </form>
+
+        {% if error %}
+        <div class="error">{{ error }}</div>
+        {% endif %}
+
+        {% if result %}
+        {% set cancer = result.cancer_assessment %}
+        {% set prediction = result.prediction %}
+        <section class="result">
+          <div class="assessment assessment--{{ cancer.level }}">
+            <div class="assessment__title">
+              {{ 'Likely NOT cancer' if cancer.level == 'low' else 'Possible cancer' }}
+            </div>
+            <div class="assessment__message">{{ cancer.message }}</div>
+            <div class="assessment__split">
+              <div class="assessment__metric">
+                <span class="assessment__num">{{ cancer.malignant_percent }}%</span>
+                <span class="assessment__cap">cancerous</span>
+              </div>
+              <div class="assessment__metric">
+                <span class="assessment__num">{{ cancer.benign_percent }}%</span>
+                <span class="assessment__cap">benign</span>
+              </div>
+            </div>
+          </div>
+
+          <h3 class="result__heading">Most likely lesion type</h3>
+          <div class="verdict {{ 'verdict--alert' if prediction.malignant else 'verdict--ok' }}">
+            <div class="verdict__label">
+              {{ prediction.label }}
+              <span class="badge {{ 'badge--alert' if prediction.malignant else 'badge--ok' }}">
+                {{ 'cancerous type' if prediction.malignant else 'benign type' }}
+              </span>
+            </div>
+            <div class="verdict__confidence">{{ prediction.confidence_percent }}% confidence</div>
+          </div>
+
+          <h3 class="result__heading">All classes</h3>
+          <ul class="bars">
+            {% for p in result.probabilities %}
+            <li class="bar">
+              <div class="bar__top">
+                <span class="bar__label">
+                  {{ p.label }}
+                  {% if p.malignant %}<span class="tag-malignant">cancerous</span>{% endif %}
+                </span>
+                <span class="bar__value">{{ p.percent }}%</span>
+              </div>
+              <div class="bar__track">
+                <div class="bar__fill {{ 'bar__fill--alert' if p.malignant else '' }}"
+                     style="width: {{ [p.percent, 1]|max }}%"></div>
+              </div>
+            </li>
+            {% endfor %}
+          </ul>
+
+          <p class="result__note">{{ result.disclaimer }}</p>
+        </section>
+        {% endif %}
+      </main>
+
+      <footer class="footer">
+        <span>HAM10000 &middot; CNN &middot; Flask + HTML/CSS</span>
+      </footer>
+    </div>
+  </body>
+</html>

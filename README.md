@@ -1,8 +1,8 @@
 # Skin Lesion Classifier
 
 An educational skin-lesion classification demo. Train a model in Google Colab,
-serve it with a FastAPI backend, and run a React frontend that lets you upload
-an image and see a live prediction.
+then run a single **Flask** app that serves a plain HTML/CSS page where you
+upload an image and see a live prediction. No Node.js, React, or build step.
 
 > **Disclaimer:** This is an educational/screening-aid demo, **not** a medical
 > device. It must not be used for diagnosis. Always consult a qualified
@@ -11,15 +11,69 @@ an image and see a live prediction.
 ## Architecture
 
 ```
-Google Colab (train)  ->  model.keras  ->  FastAPI /predict  <-  React (upload)```
+Google Colab (train)  ->  model.keras  ->  Flask app (HTML/CSS UI + /predict)
+```
 
 - **notebook/** - Colab notebook: HAM10000 + SqueezeNet (trained from scratch).
-- **backend/**  - FastAPI app exposing `/predict`.
-- **frontend/** - Vite + React app with image upload.
+- **backend/**  - Flask app (`app.py`) that loads the model and serves the UI.
+  - `templates/index.html` - the upload form and results page (server-rendered).
+  - `static/styles.css`    - styling.
+  - `model/model.keras`    - the trained model.
 
 The model predicts 7 HAM10000 classes:
 `akiec, bcc, bkl, df, mel, nv, vasc` (alphabetical order, kept in sync between
-the notebook's `class_indices` and `CLASS_ORDER` in `backend/main.py`).
+the notebook's `class_indices` and `CLASS_ORDER` in `backend/app.py`).
+
+## Quick start (any OS)
+
+The easiest way - one command that checks Python, creates the virtualenv,
+installs requirements, and starts the app:
+
+```bash
+python run.py
+```
+
+Then open http://localhost:8000.
+
+Options:
+
+```bash
+python run.py --setup-only   # install everything but don't start the server
+python run.py --recreate     # rebuild backend/.venv from scratch
+python run.py --port 8001    # use a different port
+```
+
+### Platform launchers (optional)
+
+- **Windows:** double-click `start.bat`, or run `.\start.ps1`.
+- **macOS / Linux:** run `./start.sh`.
+
+Both do the same thing as `python run.py`.
+
+> **Windows note:** if installing TensorFlow fails with a
+> `No such file or directory` error, it's the Windows 260-character path limit.
+> Either move the project to a short path like `C:\scd`, or run
+> `python run.py --enable-long-paths` in an **admin** PowerShell, then
+> `python run.py --recreate`.
+
+## Manual setup
+
+```bash
+cd backend
+python -m venv .venv
+# Windows:  .\.venv\Scripts\activate
+# mac/linux: source .venv/bin/activate
+pip install -r requirements.txt
+python app.py
+```
+
+Open http://localhost:8000.
+
+- `GET /health` reports whether a model is loaded.
+- `POST /api/predict` is a JSON API (multipart `file` + optional `age`, `sex`,
+  `localization`) if you want to call it programmatically.
+- If no model is present, the page shows a notice; drop a `model.keras` into
+  `backend/model/` and restart.
 
 ## 1. Train the model (Google Colab)
 
@@ -31,51 +85,23 @@ the notebook's `class_indices` and `CLASS_ORDER` in `backend/main.py`).
 5. Unzip it and copy **`model.keras`** into `backend/model/`.
 
 > Tip: check the `class_indices` printed in the notebook matches `CLASS_ORDER`
-> in `backend/main.py`. They should both be alphabetical.
-
-## 2. Run the backend
-
-```bash
-cd backend
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
-```
-
-- API: http://localhost:8000  (interactive docs at `/docs`)
-- `GET /health` reports whether a model is loaded.
-- If no model is present, `/predict` returns 503 with instructions.
-
-## 3. Run the frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Open http://localhost:5173. The dev server proxies `/api` to the backend on
-port 8000, so no extra config is needed locally.
-
-Upload a dermatoscopic image and click **Analyze image** to see the predicted
-class, a confidence score, and per-class probabilities.
+> in `backend/app.py`. They should both be alphabetical.
 
 ## Configuration
 
-| Where | Variable | Purpose |
-| --- | --- | --- |
-| backend | `MODEL_DIR` | Folder holding the model (default `backend/model`). |
-| backend | `IMG_SIZE` | Input size, must match training (default `224`). |
-| frontend | `VITE_API_BASE` | Backend URL in production (see `.env.example`). |
+| Variable | Purpose |
+| --- | --- |
+| `MODEL_DIR` | Folder holding the model (default `backend/model`). |
+| `IMG_SIZE`  | Fallback input size if it can't be read from the model (default `224`). |
+| `PORT`      | Port for the Flask app (default `8000`). |
+| `FLASK_DEBUG` | Set to `0` to disable debug/auto-reload. |
 
 ## Deployment notes
 
-- **Backend:** Hugging Face Spaces (Docker) or Render work well. Bake the model
-  into the image or download it at startup.
-- **Frontend:** any static host (Netlify, Vercel, GitHub Pages). Set
-  `VITE_API_BASE` to your deployed backend URL before `npm run build`.
-- Tighten CORS `allow_origins` in `backend/main.py` to your frontend origin
-  before going public.
+- Run behind a production WSGI server (e.g. `gunicorn app:app` on Linux, or
+  `waitress-serve --port 8000 app:app` on Windows) instead of `python app.py`.
+- Host on Render, Railway, or Hugging Face Spaces (Docker). Bake the model into
+  the image or download it at startup.
 
 ## Responsible use
 

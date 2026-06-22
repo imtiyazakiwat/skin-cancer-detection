@@ -65,19 +65,21 @@ body {
 }
 
 .dropzone {
-  border: 2px dashed var(--border);
-  border-radius: 14px;
-  min-height: 240px;
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-direction: column;
+  border: 2px dashed var(--border);
+  border-radius: 14px;
+  min-height: 240px;
   cursor: pointer;
   transition: border-color 0.2s, background 0.2s;
   overflow: hidden;
   background: var(--card-soft);
+  padding: 14px;
 }
 
-.dropzone--over {
+.dropzone:hover {
   border-color: var(--primary);
   background: rgba(56, 189, 248, 0.08);
 }
@@ -104,6 +106,23 @@ body {
   max-height: 320px;
   object-fit: contain;
   display: block;
+  margin-bottom: 12px;
+}
+
+.file-input {
+  color: var(--muted);
+  font-size: 0.85rem;
+  max-width: 100%;
+}
+
+.file-input::file-selector-button {
+  margin-right: 10px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
 }
 
 .meta {
@@ -176,14 +195,16 @@ body {
   color: var(--text);
   font-size: 0.95rem;
   cursor: pointer;
+  text-align: center;
+  text-decoration: none;
   transition: transform 0.05s, background 0.2s, opacity 0.2s;
 }
 
-.btn:hover:not(:disabled) {
+.btn:hover {
   background: #324158;
 }
 
-.btn:active:not(:disabled) {
+.btn:active {
   transform: translateY(1px);
 }
 
@@ -194,13 +215,8 @@ body {
   font-weight: 600;
 }
 
-.btn--primary:hover:not(:disabled) {
+.btn--primary:hover {
   background: var(--primary);
-}
-
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 .error {
@@ -296,10 +312,6 @@ body {
   padding: 1px 7px;
 }
 
-.bar__fill--alert {
-  background: linear-gradient(90deg, #fb7185, #f43f5e);
-}
-
 .verdict {
   display: flex;
   align-items: center;
@@ -391,7 +403,10 @@ body {
   height: 100%;
   background: linear-gradient(90deg, var(--primary), var(--primary-strong));
   border-radius: 999px;
-  transition: width 0.4s ease;
+}
+
+.bar__fill--alert {
+  background: linear-gradient(90deg, #fb7185, #f43f5e);
 }
 
 .result__note {

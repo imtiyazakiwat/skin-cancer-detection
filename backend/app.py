@@ -13,6 +13,7 @@ and must not be used for actual diagnosis. Always consult a dermatologist.
 import base64
 import io
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -32,6 +33,15 @@ SKIN_THRESHOLD = float(os.getenv("SKIN_THRESHOLD", "0.30"))
 # If a pretrained ImageNet model recognizes a real-world object (car, fruit,
 # book...) with at least this confidence, treat the photo as "not a lesion".
 OBJECT_THRESHOLD = float(os.getenv("OBJECT_THRESHOLD", "0.35"))
+# ImageNet has no "skin lesion" category, so close-ups of real skin are often
+# misread as one of these skin-adjacent labels. We ignore them so a genuine
+# skin photo is never rejected as "an object". Confident non-skin labels
+# (e.g. "sports car") are still trusted and will reject the image.
+SKIN_ADJACENT_LABELS = {
+    "tick", "nipple", "band_aid", "bandage", "wig", "bath_towel",
+    "face_powder", "sunscreen", "hair_spray", "lotion", "mosquito_net",
+    "hamper", "swab",
+}
 # Set to "0" to skip the ImageNet object check (e.g. fully offline).
 USE_OBJECT_CHECK = os.getenv("USE_OBJECT_CHECK", "1") != "0"
 
@@ -48,6 +58,52 @@ CLASS_LABELS = {
 }
 CLASS_ORDER = ["akiec", "bcc", "bkl", "df", "mel", "nv", "vasc"]
 MALIGNANT = {"mel", "bcc", "akiec"}
+
+# Educational, plain-language guidance per lesion type (NOT medical advice).
+CLASS_ADVICE = {
+    "akiec": {
+        "about": "Actinic keratoses / early intraepithelial carcinoma are rough, "
+                 "scaly patches from long-term sun exposure. They are pre-cancerous "
+                 "or very early cancer.",
+        "action": "See a dermatologist soon. Often treated with cryotherapy, "
+                  "topical creams, or a minor procedure.",
+    },
+    "bcc": {
+        "about": "Basal cell carcinoma is the most common skin cancer. It grows "
+                 "slowly and rarely spreads, but it does need treatment.",
+        "action": "Book a dermatologist appointment. BCC is highly treatable, "
+                  "especially when caught early.",
+    },
+    "bkl": {
+        "about": "Benign keratosis-like lesions (e.g. seborrheic keratoses, "
+                 "sun spots) are non-cancerous and very common with age.",
+        "action": "Usually harmless. Mention it at a routine skin check; see a "
+                  "doctor sooner if it changes.",
+    },
+    "df": {
+        "about": "Dermatofibroma is a common benign skin nodule, often firm and "
+                 "found on the legs. It is not cancer.",
+        "action": "Generally no treatment needed. Get it checked if it grows, "
+                  "bleeds, or becomes painful.",
+    },
+    "mel": {
+        "about": "Melanoma is the most serious skin cancer. Early detection is "
+                 "critical because it can spread.",
+        "action": "See a dermatologist promptly (within days). Do not wait - early "
+                  "melanoma is very treatable.",
+    },
+    "nv": {
+        "about": "Melanocytic nevi are ordinary moles and are usually benign.",
+        "action": "Monitor with the ABCDE rule. See a doctor if it changes in size, "
+                  "shape, or color, or starts to itch or bleed.",
+    },
+    "vasc": {
+        "about": "Vascular lesions (e.g. angiomas, hemangiomas) are made of blood "
+                 "vessels and are almost always benign.",
+        "action": "Usually harmless. Get any rapidly changing or bleeding lesion "
+                  "checked.",
+    },
+}
 
 # ---------------------------------------------------------------------------
 # Metadata encoding (multimodal model) - must match the training notebook.
@@ -206,12 +262,65 @@ def recognize_object(image_bytes: bytes):
         return None, 0.0
 
 
+def build_advice(top_key: str, level: str, malignant_percent: float) -> dict:
+    """Build tailored, exportable guidance from the prediction (educational)."""
+    base = CLASS_ADVICE.get(top_key, {})
+    if level == "high":
+        headline = "See a dermatologist promptly"
+        urgency = "Within a few days"
+        steps = [
+            "Book an appointment with a dermatologist as soon as possible.",
+            "Avoid sun on the area and don't scratch or irritate it.",
+            "Take clear, well-lit photos to track any changes until your visit.",
+        ]
+    elif level == "medium":
+        headline = "Get this checked by a doctor"
+        urgency = "Within 1-2 weeks"
+        steps = [
+            "Schedule a dermatology or GP appointment to have the lesion examined.",
+            "Watch for the ABCDE warning signs listed below.",
+            "Photograph the lesion now so you can compare it over time.",
+        ]
+    else:
+        headline = "Likely benign - keep an eye on it"
+        urgency = "Routine / next checkup"
+        steps = [
+            "No urgent action needed, but monitor the lesion monthly.",
+            "Use the ABCDE rule and note any changes.",
+            "Mention it at your next routine skin check.",
+        ]
+    return {
+        "headline": headline,
+        "urgency": urgency,
+        "about": base.get("about", ""),
+        "recommended_action": base.get("action", ""),
+        "steps": steps,
+        "abcde": [
+            "A - Asymmetry: one half doesn't match the other.",
+            "B - Border: edges are irregular, ragged, or blurred.",
+            "C - Color: uneven shades of brown, black, red, white, or blue.",
+            "D - Diameter: larger than 6 mm (about a pencil eraser).",
+            "E - Evolving: changing in size, shape, color, or symptoms.",
+        ],
+        "malignant_percent": malignant_percent,
+    }
+
+
 def run_prediction(image_bytes: bytes, age, sex, localization) -> dict:
     """Core inference shared by the HTML form and the JSON API."""
     # --- Out-of-distribution guard: only classify images that look like skin. --
     skin_frac = skin_fraction(image_bytes)
     obj_label, obj_conf = recognize_object(image_bytes)
-    is_object = obj_conf >= OBJECT_THRESHOLD
+
+    # A close-up of real skin can fool ImageNet (it has no "skin lesion" class),
+    # so it may guess a skin-adjacent label like "tick" or "nipple" - those are
+    # ignored. But a confident, clearly non-skin label (e.g. "sports car") means
+    # the photo is not a lesion and is rejected, no matter how skin-colored it
+    # looks. (Warm scenes like sunsets also score high on the skin-tone rule, so
+    # the skin fraction alone can't be trusted to override the object check.)
+    label_norm = (obj_label or "").lower()
+    label_is_skin_adjacent = label_norm in SKIN_ADJACENT_LABELS
+    is_object = obj_conf >= OBJECT_THRESHOLD and not label_is_skin_adjacent
     looks_like_skin = (skin_frac >= SKIN_THRESHOLD) and not is_object
 
     if not looks_like_skin:
@@ -285,28 +394,6 @@ def run_prediction(image_bytes: bytes, age, sex, localization) -> dict:
         message = "Likely benign (not cancer) - but this is not a diagnosis."
         level = "low"
 
-    skin_frac = skin_fraction(image_bytes)
-    obj_label, obj_conf = recognize_object(image_bytes)
-    is_object = obj_conf >= OBJECT_THRESHOLD
-    looks_like_skin = (skin_frac >= SKIN_THRESHOLD) and not is_object
-
-    if looks_like_skin:
-        warning = None
-    elif is_object:
-        nice = obj_label.replace("_", " ") if obj_label else "an object"
-        warning = (
-            f"This looks like a photo of '{nice}', not a skin lesion. The model "
-            "only knows 7 skin-lesion types and is forced to label any image as "
-            "one of them, so this result is meaningless. Upload a clear, close-up "
-            "photo of the skin lesion instead."
-        )
-    else:
-        warning = (
-            "This doesn't look like a close-up (dermatoscopic) skin image, so this "
-            "result is almost certainly meaningless. Upload a clear, close-up photo "
-            "of the skin lesion instead."
-        )
-
     return {
         "input_check": {
             "looks_like_skin": True,
@@ -331,6 +418,7 @@ def run_prediction(image_bytes: bytes, age, sex, localization) -> dict:
             "message": message,
         },
         "probabilities": probabilities,
+        "advice": build_advice(top_key, level, round(malignant_probability * 100, 1)),
         "disclaimer": (
             "This result is from an educational model and may be wrong. "
             "It is not a diagnosis. Please consult a qualified dermatologist."
@@ -361,6 +449,7 @@ def _form_context(**overrides):
         "result": None,
         "error": None,
         "image_data_uri": None,
+        "generated_at": datetime.now().strftime("%d %b %Y, %H:%M"),
     }
     ctx.update(overrides)
     return ctx

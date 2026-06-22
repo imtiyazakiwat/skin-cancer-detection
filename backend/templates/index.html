@@ -1,25 +1,104 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Skin Lesion Classifier (Demo)</title>
+    <title>DermaScan AI &middot; Skin Lesion Screening</title>
+    <meta
+      name="description"
+      content="DermaScan AI - an educational AI screening aid for skin lesions with exportable, plain-language guidance."
+    />
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
   </head>
   <body>
-    <div class="page">
-      <header class="header">
-        <h1>Skin Lesion Classifier</h1>
-        <p class="subtitle">Upload a dermatoscopic image to get an AI screening estimate.</p>
-      </header>
+    <!-- Animated aurora background -->
+    <div class="aurora" aria-hidden="true">
+      <span class="aurora__blob aurora__blob--1"></span>
+      <span class="aurora__blob aurora__blob--2"></span>
+      <span class="aurora__blob aurora__blob--3"></span>
+      <div class="aurora__grid"></div>
+    </div>
 
+    <!-- Top navigation -->
+    <header class="nav">
+      <a class="nav__brand" href="#top">
+        <span class="nav__logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 21s-7-4.35-7-10a7 7 0 0 1 14 0c0 5.65-7 10-7 10z" />
+            <circle cx="12" cy="11" r="2.5" />
+          </svg>
+        </span>
+        <span class="nav__name">DermaScan<span class="nav__name-ai">AI</span></span>
+      </a>
+      <nav class="nav__links">
+        <a href="#analyze">Analyze</a>
+        <a href="#how">How it works</a>
+        <a href="#features">Features</a>
+      </nav>
+      <button id="theme-toggle" class="nav__theme" type="button" aria-label="Toggle color theme" title="Toggle theme">
+        <svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </header>
+
+    <a id="top"></a>
+
+    <!-- Hero -->
+    <section class="hero">
+      <div class="hero__content">
+        <span class="pill">
+          <span class="pill__dot"></span> AI-assisted skin screening
+        </span>
+        <h1 class="hero__title">
+          Spot skin changes early with
+          <span class="grad-text">DermaScan&nbsp;AI</span>
+        </h1>
+        <p class="hero__sub">
+          Upload a close-up photo of a skin lesion and get an instant,
+          plain-language screening estimate across 7 lesion types - plus
+          exportable guidance you can share with your doctor.
+        </p>
+        <div class="hero__cta">
+          <a class="btn btn--primary" href="#analyze">Analyze a photo</a>
+          <a class="btn btn--ghost" href="#how">See how it works</a>
+        </div>
+        <ul class="hero__stats">
+          <li><strong>7</strong><span>lesion types</span></li>
+          <li><strong>HAM10000</strong><span>trained on</span></li>
+          <li><strong>&lt;3s</strong><span>per scan</span></li>
+        </ul>
+      </div>
+
+      <!-- Decorative scanner visual -->
+      <div class="scanner" aria-hidden="true">
+        <div class="scanner__frame">
+          <div class="scanner__skin"></div>
+          <div class="scanner__lesion"></div>
+          <div class="scanner__line"></div>
+          <span class="scanner__corner scanner__corner--tl"></span>
+          <span class="scanner__corner scanner__corner--tr"></span>
+          <span class="scanner__corner scanner__corner--bl"></span>
+          <span class="scanner__corner scanner__corner--br"></span>
+        </div>
+        <div class="scanner__chip scanner__chip--1">Analyzing texture…</div>
+        <div class="scanner__chip scanner__chip--2">Benign 81%</div>
+      </div>
+    </section>
+
+    <main class="page">
       <div class="disclaimer" role="alert">
         <strong>Educational demo only.</strong> This is not a medical device and
         does not provide a diagnosis. Always consult a qualified dermatologist
         for any health concern.
       </div>
 
-      <main class="card">
+      <!-- Analyzer -->
+      <section id="analyze" class="card">
+        <div class="card__head">
+          <h2 class="card__title">Analyze a lesion</h2>
+          <p class="card__hint">Drag &amp; drop, paste, or choose a clear, close-up image.</p>
+        </div>
+
         {% if not model_loaded %}
         <div class="error">
           No model is loaded yet. Place a trained <code>model.keras</code> in
@@ -28,14 +107,19 @@
         {% endif %}
 
         <form method="POST" action="/" enctype="multipart/form-data">
-          <label class="dropzone" for="file-input">
+          <label class="dropzone" for="file-input" id="dropzone">
             {% if image_data_uri %}
-            <img src="{{ image_data_uri }}" alt="Selected lesion" class="preview" />
+            <img src="{{ image_data_uri }}" alt="Selected lesion" class="preview" id="preview-img" />
+            <span class="dropzone__replace">Click or drop to replace</span>
             {% else %}
-            <div class="dropzone__hint">
-              <p class="dropzone__title">Choose an image</p>
-              <p class="dropzone__sub">JPG / PNG, max {{ max_file_mb }} MB</p>
+            <div class="dropzone__hint" id="dropzone-hint">
+              <span class="dropzone__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+              </span>
+              <p class="dropzone__title">Drop image here or click to upload</p>
+              <p class="dropzone__sub">JPG / PNG, max {{ max_file_mb }} MB &middot; you can also paste from clipboard</p>
             </div>
+            <img src="" alt="Selected lesion preview" class="preview" id="preview-img" hidden />
             {% endif %}
             <input id="file-input" name="file" type="file" accept="image/*" class="file-input" />
           </label>
@@ -72,7 +156,10 @@
           </fieldset>
 
           <div class="actions">
-            <button class="btn btn--primary" type="submit">Analyze image</button>
+            <button class="btn btn--primary" type="submit">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+              Analyze image
+            </button>
             <a class="btn" href="/">Reset</a>
           </div>
         </form>
@@ -82,7 +169,7 @@
         {% endif %}
 
         {% if result %}
-        <section class="result">
+        <section class="result" id="result">
           {% if not result.input_check.looks_like_skin %}
           <div class="ood-warning" role="alert">
             <strong>Not a skin image - no result shown.</strong>
@@ -91,20 +178,54 @@
           {% else %}
           {% set cancer = result.cancer_assessment %}
           {% set prediction = result.prediction %}
+          {% set advice = result.advice %}
+
+          <!-- Screening summary with donut -->
           <div class="assessment assessment--{{ cancer.level }}">
-            <div class="assessment__title">
-              {{ 'Likely NOT cancer' if cancer.level == 'low' else 'Possible cancer' }}
+            <div class="ring" style="--p: {{ cancer.malignant_percent }}">
+              <div class="ring__center">
+                <span class="ring__num">{{ cancer.malignant_percent }}%</span>
+                <span class="ring__cap">risk</span>
+              </div>
             </div>
-            <div class="assessment__message">{{ cancer.message }}</div>
-            <div class="assessment__split">
-              <div class="assessment__metric">
-                <span class="assessment__num">{{ cancer.malignant_percent }}%</span>
-                <span class="assessment__cap">cancerous</span>
+            <div class="assessment__body">
+              <div class="assessment__title">
+                {{ 'Likely NOT cancer' if cancer.level == 'low' else 'Possible cancer' }}
               </div>
-              <div class="assessment__metric">
-                <span class="assessment__num">{{ cancer.benign_percent }}%</span>
-                <span class="assessment__cap">benign</span>
+              <div class="assessment__message">{{ cancer.message }}</div>
+              <div class="assessment__split">
+                <div class="assessment__metric">
+                  <span class="assessment__num">{{ cancer.malignant_percent }}%</span>
+                  <span class="assessment__cap">cancerous</span>
+                </div>
+                <div class="assessment__metric">
+                  <span class="assessment__num">{{ cancer.benign_percent }}%</span>
+                  <span class="assessment__cap">benign</span>
+                </div>
+                <div class="assessment__metric">
+                  <span class="assessment__num assessment__num--urgency">{{ advice.urgency }}</span>
+                  <span class="assessment__cap">suggested timing</span>
+                </div>
               </div>
+            </div>
+          </div>
+
+          <!-- Export toolbar -->
+          <div class="export-bar no-print">
+            <span class="export-bar__label">Export medical advice</span>
+            <div class="export-bar__btns">
+              <button type="button" class="btn btn--soft" data-export="pdf">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></svg>
+                Save as PDF
+              </button>
+              <button type="button" class="btn btn--soft" data-export="download">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+                Download report
+              </button>
+              <button type="button" class="btn btn--soft" data-export="copy">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                <span data-copy-label>Copy advice</span>
+              </button>
             </div>
           </div>
 
@@ -132,21 +253,134 @@
               </div>
               <div class="bar__track">
                 <div class="bar__fill {{ 'bar__fill--alert' if p.malignant else '' }}"
-                     style="width: {{ [p.percent, 1]|max }}%"></div>
+                     style="--w: {{ [p.percent, 1]|max }}%"></div>
               </div>
             </li>
             {% endfor %}
           </ul>
 
+          <!-- Medical advice (was generated but never shown before) -->
+          <h3 class="result__heading">Recommended next steps</h3>
+          <div class="advice">
+            <div class="advice__headline advice__headline--{{ cancer.level }}">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/><path d="M9 21h6M10 17v4M14 17v4"/></svg>
+              <div>
+                <span class="advice__headline-text">{{ advice.headline }}</span>
+                <span class="advice__urgency">Suggested timing: {{ advice.urgency }}</span>
+              </div>
+            </div>
+
+            {% if advice.about %}
+            <p class="advice__about"><strong>About this finding.</strong> {{ advice.about }}</p>
+            {% endif %}
+            {% if advice.recommended_action %}
+            <p class="advice__action"><strong>What to do.</strong> {{ advice.recommended_action }}</p>
+            {% endif %}
+
+            <ol class="advice__steps">
+              {% for step in advice.steps %}
+              <li>{{ step }}</li>
+              {% endfor %}
+            </ol>
+
+            <div class="abcde">
+              <span class="abcde__title">The ABCDE warning signs of melanoma</span>
+              <div class="abcde__grid">
+                {% for item in advice.abcde %}
+                <div class="abcde__item">
+                  <span class="abcde__letter">{{ item[0] }}</span>
+                  <span class="abcde__text">{{ item[4:] if item[1:4] == ' - ' else item }}</span>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+
           <p class="result__note">{{ result.disclaimer }}</p>
+
+          <!-- Embedded data used by the export feature -->
+          <script id="report-data" type="application/json">
+            {{ {
+              "generated_at": generated_at,
+              "age": age,
+              "sex": sex,
+              "localization": localization,
+              "result": result
+            } | tojson }}
+          </script>
           {% endif %}
         </section>
         {% endif %}
-      </main>
+      </section>
+
+      <!-- How it works -->
+      <section id="how" class="section">
+        <h2 class="section__title">How it works</h2>
+        <p class="section__sub">Three quick steps from photo to guidance.</p>
+        <div class="steps">
+          <article class="step">
+            <span class="step__num">1</span>
+            <h3>Upload a close-up</h3>
+            <p>Drop or paste a well-lit, in-focus photo of the lesion. We first check it actually looks like skin.</p>
+          </article>
+          <article class="step">
+            <span class="step__num">2</span>
+            <h3>AI screening</h3>
+            <p>A CNN trained on HAM10000 estimates probabilities across 7 lesion types and a cancer-risk score.</p>
+          </article>
+          <article class="step">
+            <span class="step__num">3</span>
+            <h3>Export & act</h3>
+            <p>Get plain-language next steps and download a shareable report for your dermatologist.</p>
+          </article>
+        </div>
+      </section>
+
+      <!-- Features -->
+      <section id="features" class="section">
+        <h2 class="section__title">What's inside</h2>
+        <p class="section__sub">Built to be useful, honest, and easy to share.</p>
+        <div class="features">
+          <article class="feature">
+            <span class="feature__ic">🛡️</span>
+            <h3>Not-a-skin guard</h3>
+            <p>Rejects cars, food, and random photos so you never get a meaningless "diagnosis".</p>
+          </article>
+          <article class="feature">
+            <span class="feature__ic">📊</span>
+            <h3>Full breakdown</h3>
+            <p>See the probability for every lesion type, not just the top guess.</p>
+          </article>
+          <article class="feature">
+            <span class="feature__ic">📄</span>
+            <h3>Exportable advice</h3>
+            <p>Save a PDF, download a report file, or copy guidance to share instantly.</p>
+          </article>
+          <article class="feature">
+            <span class="feature__ic">🧭</span>
+            <h3>ABCDE guidance</h3>
+            <p>Learn the warning signs of melanoma with every result.</p>
+          </article>
+          <article class="feature">
+            <span class="feature__ic">🩺</span>
+            <h3>Context aware</h3>
+            <p>Optional age, sex, and body-site inputs sharpen the estimate.</p>
+          </article>
+          <article class="feature">
+            <span class="feature__ic">⚡</span>
+            <h3>Fast & private</h3>
+            <p>Runs locally through your Flask server - images stay on your machine.</p>
+          </article>
+        </div>
+      </section>
 
       <footer class="footer">
+        <span class="footer__brand">DermaScan&nbsp;AI</span>
         <span>HAM10000 &middot; CNN &middot; Flask + HTML/CSS</span>
+        <span class="footer__fine">Educational project - not for clinical use.</span>
       </footer>
-    </div>
+    </main>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
   </body>
 </html>

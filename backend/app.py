@@ -29,6 +29,11 @@ MAX_FILE_MB = 10
 # If less than this fraction of the image looks like skin, warn that the photo
 # probably isn't a dermatoscopic skin image (so the result is meaningless).
 SKIN_THRESHOLD = float(os.getenv("SKIN_THRESHOLD", "0.30"))
+# If a pretrained ImageNet model recognizes a real-world object (car, fruit,
+# book...) with at least this confidence, treat the photo as "not a lesion".
+OBJECT_THRESHOLD = float(os.getenv("OBJECT_THRESHOLD", "0.35"))
+# Set to "0" to skip the ImageNet object check (e.g. fully offline).
+USE_OBJECT_CHECK = os.getenv("USE_OBJECT_CHECK", "1") != "0"
 
 # HAM10000 class labels (7 classes). Order MUST match the training generator's
 # class_indices (alphabetical for the 224px demo models).
@@ -166,6 +171,41 @@ def skin_fraction(image_bytes: bytes) -> float:
     return float((rule_rgb | rule_ycc).mean())
 
 
+_object_model = None
+
+
+def recognize_object(image_bytes: bytes):
+    """Use a pretrained ImageNet model to see if the photo is a known object.
+
+    Returns (label, confidence). A real-world object (car, banana, book) scores
+    high; a skin-lesion close-up isn't an ImageNet category, so it scores low.
+    Returns (None, 0.0) if the check is disabled or the model can't be loaded
+    (e.g. no internet to download weights the first time).
+    """
+    global _object_model
+    if not USE_OBJECT_CHECK:
+        return None, 0.0
+    try:
+        import tensorflow as tf
+        from tensorflow.keras.applications.mobilenet_v2 import (
+            decode_predictions,
+            preprocess_input,
+        )
+
+        if _object_model is None:
+            _object_model = tf.keras.applications.MobileNetV2(weights="imagenet")
+
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize((224, 224))
+        x = np.expand_dims(np.asarray(img, dtype=np.float32), axis=0)
+        x = preprocess_input(x)
+        preds = _object_model.predict(x, verbose=0)
+        _, label, conf = decode_predictions(preds, top=1)[0][0]
+        return label, float(conf)
+    except Exception:
+        # Offline / weights unavailable - fall back to the skin-tone check only.
+        return None, 0.0
+
+
 def run_prediction(image_bytes: bytes, age, sex, localization) -> dict:
     """Core inference shared by the HTML form and the JSON API."""
     model = load_model()
@@ -213,19 +253,34 @@ def run_prediction(image_bytes: bytes, age, sex, localization) -> dict:
         level = "low"
 
     skin_frac = skin_fraction(image_bytes)
-    looks_like_skin = skin_frac >= SKIN_THRESHOLD
+    obj_label, obj_conf = recognize_object(image_bytes)
+    is_object = obj_conf >= OBJECT_THRESHOLD
+    looks_like_skin = (skin_frac >= SKIN_THRESHOLD) and not is_object
+
+    if looks_like_skin:
+        warning = None
+    elif is_object:
+        nice = obj_label.replace("_", " ") if obj_label else "an object"
+        warning = (
+            f"This looks like a photo of '{nice}', not a skin lesion. The model "
+            "only knows 7 skin-lesion types and is forced to label any image as "
+            "one of them, so this result is meaningless. Upload a clear, close-up "
+            "photo of the skin lesion instead."
+        )
+    else:
+        warning = (
+            "This doesn't look like a close-up (dermatoscopic) skin image, so this "
+            "result is almost certainly meaningless. Upload a clear, close-up photo "
+            "of the skin lesion instead."
+        )
 
     return {
         "input_check": {
             "looks_like_skin": looks_like_skin,
             "skin_fraction": round(skin_frac, 3),
-            "warning": (
-                None if looks_like_skin else
-                "This doesn't look like a close-up (dermatoscopic) skin image. "
-                "The model only knows 7 skin-lesion types and is forced to label "
-                "any picture as one of them, so this result is almost certainly "
-                "meaningless. Try a clear, close-up photo of the skin lesion."
-            ),
+            "detected_object": obj_label if is_object else None,
+            "object_confidence": round(obj_conf, 3),
+            "warning": warning,
         },
         "prediction": {
             "key": top_key,

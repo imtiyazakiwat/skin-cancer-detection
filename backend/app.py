@@ -208,6 +208,39 @@ def recognize_object(image_bytes: bytes):
 
 def run_prediction(image_bytes: bytes, age, sex, localization) -> dict:
     """Core inference shared by the HTML form and the JSON API."""
+    # --- Out-of-distribution guard: only classify images that look like skin. --
+    skin_frac = skin_fraction(image_bytes)
+    obj_label, obj_conf = recognize_object(image_bytes)
+    is_object = obj_conf >= OBJECT_THRESHOLD
+    looks_like_skin = (skin_frac >= SKIN_THRESHOLD) and not is_object
+
+    if not looks_like_skin:
+        if is_object:
+            nice = obj_label.replace("_", " ") if obj_label else "an object"
+            warning = (
+                f"This looks like a photo of '{nice}', not a skin lesion. "
+                "Please upload a clear, close-up photo of the skin lesion."
+            )
+        else:
+            warning = (
+                "This doesn't look like a close-up (dermatoscopic) skin image. "
+                "Please upload a clear, close-up photo of the skin lesion."
+            )
+        # Don't even run the lesion model - return only the warning.
+        return {
+            "input_check": {
+                "looks_like_skin": False,
+                "skin_fraction": round(skin_frac, 3),
+                "detected_object": obj_label if is_object else None,
+                "object_confidence": round(obj_conf, 3),
+                "warning": warning,
+            },
+            "prediction": None,
+            "cancer_assessment": None,
+            "probabilities": None,
+            "disclaimer": None,
+        }
+
     model = load_model()
     if model is None:
         raise RuntimeError(
@@ -276,11 +309,11 @@ def run_prediction(image_bytes: bytes, age, sex, localization) -> dict:
 
     return {
         "input_check": {
-            "looks_like_skin": looks_like_skin,
+            "looks_like_skin": True,
             "skin_fraction": round(skin_frac, 3),
-            "detected_object": obj_label if is_object else None,
+            "detected_object": None,
             "object_confidence": round(obj_conf, 3),
-            "warning": warning,
+            "warning": None,
         },
         "prediction": {
             "key": top_key,

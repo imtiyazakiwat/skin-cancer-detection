@@ -82,15 +82,15 @@
         {% endif %}
 
         {% if result %}
-        {% set cancer = result.cancer_assessment %}
-        {% set prediction = result.prediction %}
         <section class="result">
-          {% if result.input_check and not result.input_check.looks_like_skin %}
+          {% if not result.input_check.looks_like_skin %}
           <div class="ood-warning" role="alert">
-            <strong>This may not be a skin image.</strong>
+            <strong>Not a skin image - no result shown.</strong>
             {{ result.input_check.warning }}
           </div>
-          {% endif %}
+          {% else %}
+          {% set cancer = result.cancer_assessment %}
+          {% set prediction = result.prediction %}
           <div class="assessment assessment--{{ cancer.level }}">
             <div class="assessment__title">
               {{ 'Likely NOT cancer' if cancer.level == 'low' else 'Possible cancer' }}
@@ -139,6 +139,7 @@
           </ul>
 
           <p class="result__note">{{ result.disclaimer }}</p>
+          {% endif %}
         </section>
         {% endif %}
       </main>

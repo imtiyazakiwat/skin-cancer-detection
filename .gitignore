@@ -10,13 +10,12 @@ backend/.venv/
 __pycache__/
 *.pyc
 
-# Trained models (large binaries)
+# Models / large binaries - downloaded from Hugging Face on first run, never committed
 backend/model/*.keras
 backend/model/*.h5
 backend/model/saved_model/
 backend/model/*.tflite
-# ...but DO track the shipped demo model so the app works out of the box.
-!backend/model/model.keras
+backend/model/*.onnx
 
 # OS
 .DS_Store

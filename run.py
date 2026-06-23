@@ -40,6 +40,37 @@ BACKEND_DIR = ROOT / "backend"
 VENV_DIR = BACKEND_DIR / ".venv"
 REQ_FILE = BACKEND_DIR / "requirements.txt"
 REQ_STAMP = VENV_DIR / ".requirements.sha256"
+MODEL_DIR = BACKEND_DIR / "model"
+
+# ---------------------------------------------------------------------------
+# Pre-trained models (downloaded from Hugging Face into backend/model/).
+#
+# This project does NOT train its own model. It uses two third-party,
+# pre-trained models pulled from the Hugging Face Hub (see README.md for full
+# attribution and licenses):
+#   1. Skin lesion classifier - EfficientNetV2S fine-tuned on HAM10000
+#        repo: Miguel764/efficientnetv2s-skin-cancer-classifier
+#   2. "Not-a-skin" gate - CLIP ViT-B/32 vision encoder (ONNX)
+#        repo: Xenova/clip-vit-base-patch32
+#
+# They are downloaded once into backend/model/ and then loaded locally by the
+# app (app.py never contacts the network).
+# ---------------------------------------------------------------------------
+MODEL_FILES = [
+    # (hugging_face_repo, file_in_repo, local_filename_under_backend/model)
+    ("Miguel764/efficientnetv2s-skin-cancer-classifier",
+     "efficientnetv2s.h5", "efficientnetv2s.h5"),
+    ("Xenova/clip-vit-base-patch32",
+     "onnx/vision_model_quantized.onnx", "clip_vision.onnx"),
+]
+
+# Generic downloader executed inside the venv: hf_hub_download(repo, file) then
+# copy the result to a fixed local path. Args: <repo> <file> <dest>.
+_DL_ONELINER = (
+    "import sys, shutil, huggingface_hub as h; "
+    "src = h.hf_hub_download(sys.argv[1], sys.argv[2]); "
+    "shutil.copyfile(src, sys.argv[3])"
+)
 
 IS_WINDOWS = platform.system() == "Windows"
 IS_MAC = platform.system() == "Darwin"
@@ -199,6 +230,32 @@ def ensure_requirements() -> None:
     ok("Requirements installed.")
 
 
+def ensure_models() -> None:
+    """Download the pre-trained model files into backend/model/ (see the
+    MODEL_FILES note above for sources). Skips files already present;
+    non-fatal if offline - the app will report a clear error if a file is
+    missing when you try to use it."""
+    py = venv_python()
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    log("Fetching pre-trained model files into backend/model/ ...")
+    missing_ok = True
+    for repo, fname, local_name in MODEL_FILES:
+        dest = MODEL_DIR / local_name
+        if dest.exists() and dest.stat().st_size > 0:
+            ok(f"{local_name} already present.")
+            continue
+        log(f"Downloading {local_name} from {repo} ...")
+        code = run([str(py), "-c", _DL_ONELINER, repo, fname, str(dest)],
+                   cwd=BACKEND_DIR)
+        if code != 0:
+            warn(f"Could not download {local_name} now (offline?).")
+            missing_ok = False
+        else:
+            ok(f"Saved backend/model/{local_name}")
+    if missing_ok:
+        ok("All model files ready locally.")
+
+
 # --- 5. Run the Flask app ----------------------------------------------------
 def _popen(cmd, cwd: Path, env=None):
     kwargs = {"cwd": str(cwd), "env": env}
@@ -265,6 +322,7 @@ def main() -> None:
     warn_if_long_path_risk()
     ensure_venv(args.recreate)
     ensure_requirements()
+    ensure_models()
 
     if args.setup_only:
         print()

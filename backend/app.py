@@ -14,8 +14,12 @@ import base64
 import io
 import os
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
+
+# The EfficientNetV2S weights are an older Keras 2 .h5 file. Force the Keras 2
+# compatibility backend (tf-keras) so it deserializes correctly under
+# TensorFlow 2.16+ / Keras 3. MUST be set before TensorFlow is imported.
+os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
 
 import numpy as np
 from flask import Flask, jsonify, render_template, request
@@ -24,26 +28,26 @@ from PIL import Image
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-MODEL_DIR = Path(os.getenv("MODEL_DIR", Path(__file__).parent / "model"))
 IMG_SIZE = int(os.getenv("IMG_SIZE", "224"))
+# Temperature scaling the model author calibrated (T = 2.77) for reliable
+# probabilities. Set to 1.0 to disable.
+TEMPERATURE = float(os.getenv("TEMPERATURE", "2.77"))
 MAX_FILE_MB = 10
-# If less than this fraction of the image looks like skin, warn that the photo
-# probably isn't a dermatoscopic skin image (so the result is meaningless).
-SKIN_THRESHOLD = float(os.getenv("SKIN_THRESHOLD", "0.30"))
-# If a pretrained ImageNet model recognizes a real-world object (car, fruit,
-# book...) with at least this confidence, treat the photo as "not a lesion".
-OBJECT_THRESHOLD = float(os.getenv("OBJECT_THRESHOLD", "0.35"))
-# ImageNet has no "skin lesion" category, so close-ups of real skin are often
-# misread as one of these skin-adjacent labels. We ignore them so a genuine
-# skin photo is never rejected as "an object". Confident non-skin labels
-# (e.g. "sports car") are still trusted and will reject the image.
-SKIN_ADJACENT_LABELS = {
-    "tick", "nipple", "band_aid", "bandage", "wig", "bath_towel",
-    "face_powder", "sunscreen", "hair_spray", "lotion", "mosquito_net",
-    "hamper", "swab",
-}
-# Set to "0" to skip the ImageNet object check (e.g. fully offline).
-USE_OBJECT_CHECK = os.getenv("USE_OBJECT_CHECK", "1") != "0"
+
+# Model files live locally in backend/model/ and are provisioned by run.py.
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_DIR = os.path.join(_BASE_DIR, "model")
+LESION_MODEL_PATH = os.path.join(MODEL_DIR, "efficientnetv2s.h5")
+
+# --- Not-a-skin guard (zero-shot CLIP gate) -------------------------------
+# A small quantized CLIP vision encoder + precomputed text-prompt embeddings
+# decide whether an upload actually looks like a skin image before we run the
+# lesion model. This rejects objects/food/animals/etc. without torch at
+# runtime (onnxruntime only). Set SKIN_GATE=0 to disable.
+GATE_ENABLED = os.getenv("SKIN_GATE", "1") != "0"
+GATE_THRESHOLD = float(os.getenv("GATE_THRESHOLD", "0.5"))
+GATE_NPZ = os.path.join(MODEL_DIR, "clip_gate.npz")
+GATE_ONNX = os.path.join(MODEL_DIR, "clip_vision.onnx")
 
 # HAM10000 class labels (7 classes). Order MUST match the training generator's
 # class_indices (alphabetical for the 224px demo models).
@@ -151,28 +155,20 @@ _model = None  # lazily loaded singleton
 
 
 def load_model():
-    """Load the TF model once. Returns None if no model is present yet."""
+    """Load the local lesion model (provisioned by run.py). Cached singleton."""
     global _model
     if _model is not None:
         return _model
 
     import tensorflow as tf  # imported lazily so the app can boot without TF
 
-    keras_path = MODEL_DIR / "model.keras"
-    h5_path = MODEL_DIR / "model.h5"
-    saved_model_path = MODEL_DIR / "saved_model"
-
+    if not os.path.exists(LESION_MODEL_PATH):
+        raise RuntimeError(
+            f"Model file not found at {LESION_MODEL_PATH}. "
+            "Run 'python run.py' to download the model files first."
+        )
     try:
-        if keras_path.exists():
-            _model = tf.keras.models.load_model(keras_path)
-        elif h5_path.exists():
-            _model = tf.keras.models.load_model(h5_path)
-        elif saved_model_path.exists():
-            _model = tf.keras.layers.TFSMLayer(
-                str(saved_model_path), call_endpoint="serving_default"
-            )
-        else:
-            return None
+        _model = tf.keras.models.load_model(LESION_MODEL_PATH)
     except Exception as exc:  # pragma: no cover - defensive
         raise RuntimeError(f"Failed to load model: {exc}") from exc
 
@@ -201,65 +197,97 @@ def preprocess(image_bytes: bytes, size: int) -> np.ndarray:
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     img = img.resize((size, size))
     arr = np.asarray(img, dtype=np.float32) / 255.0
+    arr = (arr - 0.5) * 2.0  # EfficientNetV2S was trained on inputs in [-1, 1]
     return np.expand_dims(arr, axis=0)
 
 
-def skin_fraction(image_bytes: bytes) -> float:
-    """Rough estimate of how much of the image is skin-colored (0..1).
+def apply_temperature(probs: np.ndarray, temperature: float) -> np.ndarray:
+    """Temperature-scale softmax probabilities (softmax(log(p) / T)).
 
-    Combines a common RGB skin rule with a YCbCr range. This is a heuristic to
-    catch obviously-non-skin photos (cars, books, fruit), NOT a real detector.
+    Equivalent to scaling the logits by 1/T, but works directly from the
+    model's softmax output. Sharpens (T<1) or softens (T>1) the distribution.
     """
-    img = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize((128, 128))
-    arr = np.asarray(img, dtype=np.float32)
-    r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
-    mx = arr.max(axis=-1)
-    mn = arr.min(axis=-1)
-
-    rule_rgb = (
-        (r > 95) & (g > 40) & (b > 20) & ((mx - mn) > 15)
-        & (np.abs(r - g) > 15) & (r > g) & (r > b)
-    )
-    cb = 128.0 - 0.168736 * r - 0.331264 * g + 0.5 * b
-    cr = 128.0 + 0.5 * r - 0.418688 * g - 0.081312 * b
-    rule_ycc = (cb >= 77) & (cb <= 127) & (cr >= 133) & (cr <= 173)
-
-    return float((rule_rgb | rule_ycc).mean())
+    if not temperature or temperature == 1.0:
+        return probs
+    logits = np.log(np.clip(probs.astype(np.float64), 1e-12, 1.0)) / temperature
+    logits -= logits.max()
+    exp = np.exp(logits)
+    return (exp / exp.sum()).astype(np.float32)
 
 
-_object_model = None
+# ---------------------------------------------------------------------------
+# Not-a-skin guard: zero-shot CLIP gate (onnxruntime only, no torch)
+# ---------------------------------------------------------------------------
+_gate = None          # loaded singleton
+_gate_failed = False  # if assets missing/broken, fail open (skip the gate)
 
 
-def recognize_object(image_bytes: bytes):
-    """Use a pretrained ImageNet model to see if the photo is a known object.
-
-    Returns (label, confidence). A real-world object (car, banana, book) scores
-    high; a skin-lesion close-up isn't an ImageNet category, so it scores low.
-    Returns (None, 0.0) if the check is disabled or the model can't be loaded
-    (e.g. no internet to download weights the first time).
-    """
-    global _object_model
-    if not USE_OBJECT_CHECK:
-        return None, 0.0
+def load_gate():
+    """Lazily load the CLIP gate (ONNX session + precomputed text embeddings)."""
+    global _gate, _gate_failed
+    if _gate is not None or _gate_failed or not GATE_ENABLED:
+        return _gate
     try:
-        import tensorflow as tf
-        from tensorflow.keras.applications.mobilenet_v2 import (
-            decode_predictions,
-            preprocess_input,
+        import onnxruntime as ort
+
+        data = np.load(GATE_NPZ, allow_pickle=True)
+        session = ort.InferenceSession(
+            GATE_ONNX, providers=["CPUExecutionProvider"]
         )
-
-        if _object_model is None:
-            _object_model = tf.keras.applications.MobileNetV2(weights="imagenet")
-
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize((224, 224))
-        x = np.expand_dims(np.asarray(img, dtype=np.float32), axis=0)
-        x = preprocess_input(x)
-        preds = _object_model.predict(x, verbose=0)
-        _, label, conf = decode_predictions(preds, top=1)[0][0]
-        return label, float(conf)
+        _gate = {
+            "session": session,
+            "input": session.get_inputs()[0].name,
+            "text_embeds": data["text_embeds"].astype(np.float32),
+            "is_skin": data["is_skin"].astype(bool),
+            "prompts": data["prompts"],
+            "logit_scale": float(data["logit_scale"]),
+            "mean": data["image_mean"].astype(np.float32),
+            "std": data["image_std"].astype(np.float32),
+        }
     except Exception:
-        # Offline / weights unavailable - fall back to the skin-tone check only.
-        return None, 0.0
+        # Missing/broken assets -> don't block predictions, just skip the gate.
+        _gate_failed = True
+        _gate = None
+    return _gate
+
+
+def _clip_preprocess(image_bytes: bytes, mean, std, size: int = 224) -> np.ndarray:
+    """CLIP preprocessing: resize shortest edge, center crop, normalize (NCHW)."""
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    w, h = img.size
+    if w <= h:
+        nw, nh = size, max(size, round(h * size / w))
+    else:
+        nw, nh = max(size, round(w * size / h)), size
+    img = img.resize((nw, nh), Image.BICUBIC)
+    left, top = (nw - size) // 2, (nh - size) // 2
+    img = img.crop((left, top, left + size, top + size))
+    arr = np.asarray(img, dtype=np.float32) / 255.0
+    arr = (arr - mean) / std
+    return arr.transpose(2, 0, 1)[None].astype(np.float32)
+
+
+def check_is_skin(image_bytes: bytes) -> dict:
+    """Decide whether the photo looks like a skin image (vs an object/etc.)."""
+    gate = load_gate()
+    if gate is None:
+        # Gate disabled or unavailable -> allow through (fail open).
+        return {"checked": False, "is_skin": True, "skin_score": None, "label": None}
+
+    x = _clip_preprocess(image_bytes, gate["mean"], gate["std"])
+    emb = gate["session"].run(None, {gate["input"]: x})[0][0].astype(np.float32)
+    emb = emb / (np.linalg.norm(emb) + 1e-9)   # CLIP image_embeds are un-normalized
+    logits = gate["logit_scale"] * (gate["text_embeds"] @ emb)
+    probs = np.exp(logits - logits.max())
+    probs /= probs.sum()
+    skin_score = float(probs[gate["is_skin"]].sum())
+    top = int(np.argmax(probs))
+    return {
+        "checked": True,
+        "is_skin": skin_score >= GATE_THRESHOLD,
+        "skin_score": round(skin_score, 3),
+        "label": str(gate["prompts"][top]),
+    }
 
 
 def build_advice(top_key: str, level: str, malignant_percent: float) -> dict:
@@ -308,40 +336,21 @@ def build_advice(top_key: str, level: str, malignant_percent: float) -> dict:
 
 def run_prediction(image_bytes: bytes, age, sex, localization) -> dict:
     """Core inference shared by the HTML form and the JSON API."""
-    # --- Out-of-distribution guard: only classify images that look like skin. --
-    skin_frac = skin_fraction(image_bytes)
-    obj_label, obj_conf = recognize_object(image_bytes)
-
-    # A close-up of real skin can fool ImageNet (it has no "skin lesion" class),
-    # so it may guess a skin-adjacent label like "tick" or "nipple" - those are
-    # ignored. But a confident, clearly non-skin label (e.g. "sports car") means
-    # the photo is not a lesion and is rejected, no matter how skin-colored it
-    # looks. (Warm scenes like sunsets also score high on the skin-tone rule, so
-    # the skin fraction alone can't be trusted to override the object check.)
-    label_norm = (obj_label or "").lower()
-    label_is_skin_adjacent = label_norm in SKIN_ADJACENT_LABELS
-    is_object = obj_conf >= OBJECT_THRESHOLD and not label_is_skin_adjacent
-    looks_like_skin = (skin_frac >= SKIN_THRESHOLD) and not is_object
-
-    if not looks_like_skin:
-        if is_object:
-            nice = obj_label.replace("_", " ") if obj_label else "an object"
-            warning = (
-                f"This looks like a photo of '{nice}', not a skin lesion. "
-                "Please upload a clear, close-up photo of the skin lesion."
-            )
-        else:
-            warning = (
-                "This doesn't look like a close-up (dermatoscopic) skin image. "
-                "Please upload a clear, close-up photo of the skin lesion."
-            )
-        # Don't even run the lesion model - return only the warning.
+    # --- Not-a-skin guard: reject non-skin photos before running the model. ---
+    gate = check_is_skin(image_bytes)
+    if gate["checked"] and not gate["is_skin"]:
+        nice = (gate["label"] or "something that isn't skin").replace(
+            "a photo of ", ""
+        ).replace("a screenshot of ", "")
+        warning = (
+            f"This looks like {nice}, not a skin lesion. "
+            "Please upload a clear, close-up photo of the skin lesion."
+        )
         return {
             "input_check": {
                 "looks_like_skin": False,
-                "skin_fraction": round(skin_frac, 3),
-                "detected_object": obj_label if is_object else None,
-                "object_confidence": round(obj_conf, 3),
+                "skin_score": gate["skin_score"],
+                "detected": gate["label"],
                 "warning": warning,
             },
             "prediction": None,
@@ -367,6 +376,7 @@ def run_prediction(image_bytes: bytes, age, sex, localization) -> dict:
     if isinstance(preds, dict):
         preds = list(preds.values())[0]
     preds = np.asarray(preds).reshape(-1)
+    preds = apply_temperature(preds, TEMPERATURE)
 
     top_idx = int(np.argmax(preds))
     top_key = CLASS_ORDER[top_idx]
@@ -397,9 +407,8 @@ def run_prediction(image_bytes: bytes, age, sex, localization) -> dict:
     return {
         "input_check": {
             "looks_like_skin": True,
-            "skin_fraction": round(skin_frac, 3),
-            "detected_object": None,
-            "object_confidence": round(obj_conf, 3),
+            "skin_score": gate["skin_score"],
+            "detected": None,
             "warning": None,
         },
         "prediction": {
@@ -430,12 +439,8 @@ def run_prediction(image_bytes: bytes, age, sex, localization) -> dict:
 # Routes
 # ---------------------------------------------------------------------------
 def model_present() -> bool:
-    """True if a model file exists on disk (regardless of whether it's loaded)."""
-    return (
-        (MODEL_DIR / "model.keras").exists()
-        or (MODEL_DIR / "model.h5").exists()
-        or (MODEL_DIR / "saved_model").exists()
-    )
+    """True if a model is configured (the HF model is downloaded on demand)."""
+    return _model is not None or bool(HF_REPO_ID)
 
 
 def _form_context(**overrides):
@@ -530,7 +535,11 @@ def predict_api():
 
 @app.get("/health")
 def health():
-    return jsonify({"status": "ok", "model_loaded": load_model() is not None})
+    try:
+        loaded = load_model() is not None
+    except Exception:
+        loaded = False
+    return jsonify({"status": "ok", "model_loaded": loaded})
 
 
 @app.errorhandler(413)
